@@ -405,11 +405,13 @@ def train_model(
             checkpoint["scheduler_state_dict"] = scheduler.state_dict()
         torch.save(checkpoint, os.path.join(model_path, "checkpoint.pt"))
 
-        # 显示显存使用
+        # 显示显存使用(driver 级口径,与 nvidia-smi 一致)
         if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated(0) / 1024**3
-            reserved = torch.cuda.memory_reserved(0) / 1024**3
-            print(f"  显存: {allocated:.2f}GB / {reserved:.2f}GB")
+            free, total = torch.cuda.mem_get_info(0)
+            used_gb = (total - free) / 1024**3
+            total_gb = total / 1024**3
+            allocated_gb = torch.cuda.memory_allocated(0) / 1024**3
+            print(f"  显存: {used_gb:.2f}GB / {total_gb:.2f}GB (PyTorch 持有: {allocated_gb:.2f}GB)")
 
     # 删除checkpoint文件（训练完成）
     checkpoint_path = os.path.join(model_path, "checkpoint.pt")
@@ -444,7 +446,7 @@ def train_model(
         print(f"生成: {sample_text}")
     print("=" * 60)
 
-    return model
+    return model, best_val_loss
 
 
 def main():
@@ -543,7 +545,7 @@ def main():
         os.remove(checkpoint_path)
 
     # 5. 训练(传入 loaded_scheduler_state 以便 train_model 恢复 lr 调度)
-    model = train_model(model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch, best_val_loss, no_improve_epochs, optimizer, scheduler, loaded_scheduler_state)
+    model, best_val_loss = train_model(model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch, best_val_loss, no_improve_epochs, optimizer, scheduler, loaded_scheduler_state)
 
     # 保存tokenizer配置
     tokenizer.save_pretrained(os.path.join(output_dir, "model"))
