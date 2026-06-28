@@ -114,7 +114,8 @@ def load_and_preprocess_data(data_path):
 
     # 支持目录输入
     if os.path.isdir(data_path):
-        txt_files = glob.glob(os.path.join(data_path, "*.txt"))
+        # 递归扫描所有子目录下的 .txt(否则 ebook/ 下的几千个文件读不到)
+        txt_files = glob.glob(os.path.join(data_path, "**", "*.txt"), recursive=True)
         if not txt_files:
             raise FileNotFoundError(f"目录下没有txt文件: {data_path}")
         print(f"  数据目录: {data_path}")
