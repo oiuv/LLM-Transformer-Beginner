@@ -165,3 +165,5 @@ data/
 output/
 03-practice/chinese-gpt/data/
 03-practice/chinese-gpt/output/
+# 编码扫描/转码脚本生成的临时报告
+03-practice/chinese-gpt/encoding_report.txt
