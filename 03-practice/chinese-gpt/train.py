@@ -7,7 +7,7 @@ import argparse
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
-from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast, get_cosine_schedule_with_warmup
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
@@ -175,7 +175,8 @@ def train_bpe_tokenizer(paragraphs, vocab_size, output_dir):
     tokenizer.pre_tokenizer = Whitespace()
 
     # 配置训练器
-    trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=["<|pad|>", "<|unk|>", "<s>", "</s>"], min_frequency=2)
+    # min_frequency=1: 即使生僻字只出现 1 次也保留进词表,大幅减少 <unk> 输出
+    trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=["<|pad|>", "<|unk|>", "<s>", "</s>"], min_frequency=1)
 
     # 训练
     print(f"  训练中... (词表大小: {vocab_size})")
@@ -192,7 +193,11 @@ def train_bpe_tokenizer(paragraphs, vocab_size, output_dir):
     hf_tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path, bos_token="<s>", eos_token="</s>", pad_token="<|pad|>")
 
     # 显式设置 pad_token_id，避免后续使用时报错
-    hf_tokenizer.pad_token_id = hf_tokenizer.token_to_id("<|pad|>")
+    # 兼容 transformers 5.x:优先用 convert_tokens_to_ids,回退到 token_to_id
+    if hasattr(hf_tokenizer, "convert_tokens_to_ids"):
+        hf_tokenizer.pad_token_id = hf_tokenizer.convert_tokens_to_ids("<|pad|>")
+    else:
+        hf_tokenizer.pad_token_id = hf_tokenizer.token_to_id("<|pad|>")
 
     return hf_tokenizer
 
@@ -283,13 +288,34 @@ def create_model(vocab_size, config, output_dir):
 
 
 def train_model(
-    model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch=0, best_val_loss=float("inf"), no_improve_epochs=0, optimizer=None
+    model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch=0, best_val_loss=float("inf"), no_improve_epochs=0, optimizer=None, scheduler=None, loaded_scheduler_state=None
 ):
     """训练模型"""
     print("\n[阶段5] 训练模型...")
 
+    # bf16 混合精度:仅在 CUDA 上启用(RTX 4090 原生支持 bf16,显存减半、速度近翻倍)
+    # 权重保持 fp32,只是前向计算时用 bf16 → checkpoint 兼容性好
+    use_bf16 = config["device"] == "cuda" and torch.cuda.is_bf16_supported()
+    if use_bf16:
+        print("  ✓ 启用 bf16 混合精度(权重 fp32 + 计算 bf16)")
+
     if optimizer is None:
         optimizer = AdamW(model.parameters(), lr=config["learning_rate"])
+        # Cosine schedule + Warmup:前 3% 步线性升 lr,之后余弦衰减到 0
+        if scheduler is None:
+            total_steps = config["epochs"] * len(train_loader)
+            warmup_steps = max(1, int(0.03 * total_steps))
+            scheduler = get_cosine_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=total_steps,
+            )
+            print(f"  ✓ 启用 Cosine schedule (warmup={warmup_steps} 步, total={total_steps} 步)")
+
+    # 断点续训时,把已存的 scheduler state 加载到新 scheduler
+    if scheduler is not None and loaded_scheduler_state is not None:
+        scheduler.load_state_dict(loaded_scheduler_state)
+        print(f"  ✓ 恢复 scheduler 状态,当前 lr = {scheduler.get_last_lr()[0]:.2e}")
 
     patience = 3
     model_path = os.path.join(output_dir, "model")
@@ -311,12 +337,16 @@ def train_model(
 
             optimizer.zero_grad()
 
-            outputs = model(input_ids=input_ids, labels=labels)
-            loss = outputs.loss
+            # bf16 autocast:仅前向计算降精度,权重/loss/梯度保持 fp32
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
+                outputs = model(input_ids=input_ids, labels=labels)
+                loss = outputs.loss
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()  # 每步更新 lr
 
             train_loss += loss.item()
             train_steps += 1
@@ -333,7 +363,9 @@ def train_model(
                 input_ids = batch["input_ids"].to(config["device"])
                 labels = batch["labels"].to(config["device"])
 
-                outputs = model(input_ids=input_ids, labels=labels)
+                # 验证也用 bf16(保持一致,数值差异可忽略)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
+                    outputs = model(input_ids=input_ids, labels=labels)
                 val_loss += outputs.loss.item()
                 val_steps += 1
 
@@ -341,6 +373,8 @@ def train_model(
 
         print(f"  训练损失: {avg_train_loss:.4f}")
         print(f"  验证损失: {avg_val_loss:.4f}")
+        if scheduler is not None:
+            print(f"  当前 lr: {scheduler.get_last_lr()[0]:.2e}")
 
         # 保存训练日志
         with open(os.path.join(output_dir, "training.log"), "a") as f:
@@ -367,6 +401,8 @@ def train_model(
             "best_val_loss": best_val_loss,
             "no_improve_epochs": no_improve_epochs,
         }
+        if scheduler is not None:
+            checkpoint["scheduler_state_dict"] = scheduler.state_dict()
         torch.save(checkpoint, os.path.join(model_path, "checkpoint.pt"))
 
         # 显示显存使用
@@ -487,6 +523,8 @@ def main():
     best_val_loss = float("inf")
     no_improve_epochs = 0
     optimizer = None
+    scheduler = None
+    loaded_scheduler_state = None  # 暂存 checkpoint 里的 scheduler state
 
     if os.path.exists(checkpoint_path):
         print("\n  发现checkpoint，正在加载...")
@@ -497,12 +535,15 @@ def main():
         start_epoch = checkpoint["epoch"]
         best_val_loss = checkpoint["best_val_loss"]
         no_improve_epochs = checkpoint["no_improve_epochs"]
+        # 旧 checkpoint 可能没有 scheduler_state_dict(向前兼容)
+        if "scheduler_state_dict" in checkpoint:
+            loaded_scheduler_state = checkpoint["scheduler_state_dict"]
         print(f"  从第 {start_epoch + 1} 轮继续训练")
         print(f"  最佳验证损失: {best_val_loss:.4f}")
         os.remove(checkpoint_path)
 
-    # 5. 训练
-    model = train_model(model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch, best_val_loss, no_improve_epochs, optimizer)
+    # 5. 训练(传入 loaded_scheduler_state 以便 train_model 恢复 lr 调度)
+    model = train_model(model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch, best_val_loss, no_improve_epochs, optimizer, scheduler, loaded_scheduler_state)
 
     # 保存tokenizer配置
     tokenizer.save_pretrained(os.path.join(output_dir, "model"))

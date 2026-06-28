@@ -167,3 +167,5 @@ output/
 03-practice/chinese-gpt/output/
 # 编码扫描/转码脚本生成的临时报告
 03-practice/chinese-gpt/encoding_report.txt
+# 冒烟测试 / 临时输出目录(如 output_smoke_test/)
+output_*/
