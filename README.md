@@ -1,6 +1,12 @@
-# Machine-Learning-Beginner
+# LLM-Transformer-Beginner (原 Machine-Learning-Beginner)
 
-一个从零开始手写代码学习机器学习、神经网络和大语言模型的项目。
+一个从零开始手写代码学习机器学习、神经网络和大语言模型的**训练技术**项目。
+
+> 📌 **项目定位**：本项目专注于 **LLM 训练、微调、对齐与衍生技术**方向——从 `y=wx` 入门，到手撸 Llama3 大模型，再到训练自己的中文 GPT。
+>
+> 应用方向（Agent、RAG、Embedding、Skill/MCP 等）的学习请移步姊妹项目：
+> - 🤖 基于 LLM 的 Agent 开发（含 Skill/MCP）→ [LLM-Agent-Beginner](https://github.com/oiuv/LLM-Agent-Beginner)
+> - 🧬 Embedding / RAG 等应用层 → [LLM-Embedding-Beginner](https://github.com/oiuv/LLM-Embedding-Beginner)
 
 ## 🎯 项目简介
 
@@ -59,14 +65,14 @@
 3. **快速概览整体架构** → `llama3/`（完整notebook）
 
 **你将学到：**
-- 大语言模型的内部架构
-- Tokenizer（BPE 分词器）
-- Embedding 层
-- RMSNorm 归一化
-- RoPE 旋转位置编码
-- Grouped Query Attention
-- SwiGLU 前馈网络
-- KV-Cache 推理优化
+- 大语言模型的内部架构（Tokenizer / Embedding / Attention / FFN / Norm）
+- Tokenizer（BPE 分词器训练与对齐）
+- RMSNorm 归一化、RoPE 旋转位置编码、Grouped Query Attention、SwiGLU 前馈网络
+- KV-Cache 推理优化原理、Flash Attention 的工程动机
+- 现代对齐流程：SFT → RLHF (PPO 概念) → DPO/ORPO 等新一代偏好优化
+- MoE（混合专家）：Top-K 路由、负载均衡、Switch/Mixtral 风格架构
+- 长上下文技术原理：RoPE 外推、YaRN、Sliding Window Attention
+- 数据工程基础、BPE/SentencePiece 选型、混合精度训练（bf16/fp16）
 
 ---
 
@@ -81,9 +87,9 @@
 - 使用 Transformers 库构建 GPT
 - 训练自定义 BPE 分词器
 - 数据预处理和 Dataset 构建
-- 模型训练和验证
-- 断点续训和早停机制
-- 文本生成
+- 模型训练和验证（含 bf16 混合精度、Cosine Schedule + Warmup、梯度裁剪）
+- 断点续训、早停机制、显存监控
+- 文本生成（自回归 / Temperature / Top-p / Repetition Penalty）
 
 ---
 
@@ -91,13 +97,46 @@
 自由实验和测试代码的 playground。
 
 ---
-
 ### 🔮 04-future - 未来扩展
-预留目录，计划补充：
-- 模型微调（Fine-tuning）
-- 模型量化（Quantization）
-- 模型部署（Deployment）
-- 更多实战项目
+
+`04-future/` 目录预留扩展空间。下面这些**仍属于本项目定位（LLM 训练/微调技术）**，按重要性排序：
+
+**📦 参数高效微调（PEFT）**
+- LoRA / QLoRA / AdaLoRA / DoRA / IA³
+- 用 PEFT 库微调开源模型（不写一行训练循环）
+
+**⚡ 推理优化与量化**
+- KV-Cache / Grouped-Query Attention 的实现细节
+- Flash Attention 原理与 torch.nn.functional.scaled_dot_product_attention
+- PagedAttention（vLLM 思想）/ Speculative Decoding
+- 量化：bitsandbytes int4/int8 / GPTQ / AWQ
+
+**🎯 现代对齐（2024+）**
+- DPO / ORPO / SimPO / KTO（替代 PPO 的新一代偏好优化）
+- RLAIF / Constitutional AI / Process Reward Model
+- Reasoning 模型后训练：DeepSeek-R1 / GRPO / o1-style 训练循环
+
+**🔧 高级预训练工程**
+- 数据工程：清洗、deduplication、质量过滤
+- 分布式训练：DDP / FSDP / DeepSpeed
+- 显存优化：Gradient Checkpointing / Activation Offloading
+- 混合精度进阶：fp16 + GradScaler / fp8（Hopper）
+- 评估：lm-eval-harness / MMLU / GSM8K / HumanEval / Perplexity
+
+**🧩 衍生与组合**
+- Model Merging（TIES / DARE）
+- Knowledge Distillation（Teacher-Student）
+- 模型转换与导出（ONNX / GGUF / llama.cpp）
+
+**📐 长上下文与稀疏架构**
+- RoPE 外推 / YaRN / Sliding Window Attention
+- MoE 实战：Switch Transformer / Expert Parallel / All-to-All 通信
+
+**🎨 多模态训练（可选方向）**
+- Vision-Language Model（如 LLaVA）训练原理
+- CLIP-style 双塔对比学习
+
+> ⚠️ 备注：`Agent / RAG / Tool Use / Skill / MCP / Embedding 应用` 等**应用方向**不属于本项目，请见开头 [姊妹项目](#) 链接。
 
 ---
 
@@ -145,8 +184,9 @@ python 03-practice/chinese-gpt/train.py -d ../../data/小说.txt
 ## 📂 项目结构
 
 ```
-Machine-Learning-Beginner/
+LLM-Transformer-Beginner/
 ├── README.md                    # 本文件
+├── AGENTS.md                    # 给 AI 协作者的工程说明
 ├── LICENSE
 ├── .gitignore
 │
@@ -165,10 +205,16 @@ Machine-Learning-Beginner/
 │   ├── chinese-gpt/             # 中文小说 GPT
 │   └── chinese-gpt-fundamentals.md  # 基础教程项目链接
 │
-├── 04-future/                   # 🔮 未来扩展
+├── 04-future/                   # 🔮 未来扩展（PEFT / 量化 / DPO / 推理优化等）
 │
-└── tests/                       # 🧪 测试
+├── scripts/                     # 一键训练脚本 + 编码转换工具
+│
+└── tests/                       # 🧪 playground
 ```
+
+**🔗 姊妹项目（应用方向）**
+- [LLM-Agent-Beginner](https://github.com/oiuv/LLM-Agent-Beginner) — Agent / Skill / MCP
+- [LLM-Embedding-Beginner](https://github.com/oiuv/LLM-Embedding-Beginner) — Embedding / RAG 应用
 
 ---
 
