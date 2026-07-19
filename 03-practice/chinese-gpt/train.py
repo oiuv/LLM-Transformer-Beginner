@@ -3,6 +3,7 @@
 import os
 import re
 import glob
+import json
 import argparse
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -91,7 +92,7 @@ Transformer层数        | 12            | 12          | 24
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
 
     # 必需参数
-    parser.add_argument("-d", "--data_path", type=str, required=True, help="训练数据：文件路径或目录（自动扫描所有txt）")
+    parser.add_argument("-d", "--data_path", type=str, default="dataset/pretrain_t2t_mini.jsonl", help="训练数据：文件路径或目录（支持 txt/jsonl，默认 dataset/pretrain_t2t_mini.jsonl）")
 
     # 可选参数
     parser.add_argument("-o", "--output_dir", type=str, default="./output", help="输出目录 (default: ./output)")
@@ -109,24 +110,57 @@ Transformer层数        | 12            | 12          | 24
 
 
 def load_and_preprocess_data(data_path):
-    """加载并预处理文本数据（支持文件、目录）"""
+    """加载并预处理文本数据（支持文件、目录、jsonl）"""
     print("\n[阶段1] 加载数据...")
 
     # 支持目录输入
     if os.path.isdir(data_path):
-        # 递归扫描所有子目录下的 .txt(否则 ebook/ 下的几千个文件读不到)
+        # 递归扫描所有子目录下的 .txt 和 .jsonl
         txt_files = glob.glob(os.path.join(data_path, "**", "*.txt"), recursive=True)
-        if not txt_files:
-            raise FileNotFoundError(f"目录下没有txt文件: {data_path}")
+        jsonl_files = glob.glob(os.path.join(data_path, "**", "*.jsonl"), recursive=True)
+        if not txt_files and not jsonl_files:
+            raise FileNotFoundError(f"目录下没有txt或jsonl文件: {data_path}")
         print(f"  数据目录: {data_path}")
-        print(f"  找到文件: {len(txt_files)}个")
         all_text = []
         for txt_file in txt_files:
             with open(txt_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 all_text.append(content)
                 print(f"    - {os.path.basename(txt_file)}: {len(content):,}字符")
+        for jsonl_file in jsonl_files:
+            with open(jsonl_file, "r", encoding="utf-8") as f:
+                texts = []
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        if "text" in obj:
+                            texts.append(obj["text"])
+                    except json.JSONDecodeError:
+                        continue
+                content = "\n\n".join(texts)
+                all_text.append(content)
+                print(f"    - {os.path.basename(jsonl_file)}: {len(texts):,}条, {len(content):,}字符")
         text = "\n\n".join(all_text)
+    elif data_path.endswith(".jsonl"):
+        # jsonl 格式：每行 {"text": "..."}
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"数据文件不存在: {data_path}")
+        print(f"  数据文件: {data_path}")
+        with open(data_path, "r", encoding="utf-8") as f:
+            texts = []
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if "text" in obj:
+                        texts.append(obj["text"])
+                except json.JSONDecodeError:
+                    continue
+        text = "\n\n".join(texts)
+        print(f"  jsonl记录数: {len(texts):,}")
     else:
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"数据文件不存在: {data_path}")

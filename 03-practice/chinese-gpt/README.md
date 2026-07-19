@@ -6,6 +6,7 @@
 
 - ✅ 自定义 BPE 分词器（适配中文）
 - ✅ 基于 GPT2 架构
+- ✅ 支持 txt 和 jsonl 数据格式（兼容开源数据集）
 - ✅ 完整的训练流程
 - ✅ 断点续训支持
 - ✅ 早停机制
@@ -18,21 +19,35 @@
 
 ### 1. 准备数据
 
-准备中文小说文本文件（UTF-8 编码），放在 `data/` 目录下：
-```
+支持三种数据格式：
+
+```bash
+# 方式一：txt 文件（传统方式）
+data/小说.txt
+
+# 方式二：jsonl 文件（推荐，兼容开源数据集）
+dataset/pretrain_data.jsonl   # 每行 {"text": "..."}
+
+# 方式三：目录（自动扫描 .txt 和 .jsonl）
 data/
 ├── 小说1.txt
 ├── 小说2.txt
-└── ...
+└── pretrain_data.jsonl
 ```
 
 ### 2. 训练模型
 
 ```bash
-# 单文件训练
+# 默认训练（自动使用 dataset/pretrain_t2t_mini.jsonl）
+python train.py
+
+# 指定 txt 文件
 python train.py -d data/小说.txt
 
-# 多文件训练（传入目录，自动合并所有txt）
+# 指定 jsonl 文件
+python train.py -d dataset/pretrain_data.jsonl
+
+# 多文件训练（传入目录，自动合并所有 txt 和 jsonl）
 python train.py -d data/
 
 # 自定义参数
@@ -72,7 +87,7 @@ chinese-gpt/
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `-d` | 数据文件路径或目录 | 必需 |
+| `-d` | 数据文件路径或目录（支持 txt/jsonl） | `dataset/pretrain_t2t_mini.jsonl` |
 | `-o` | 输出目录 | `./output` |
 | `-V` | 词表大小 | 50000 |
 | `-C` | 上下文长度 | 512 |
@@ -198,20 +213,24 @@ output/
 ## 🎉 完整示例
 
 ```bash
-# 1. 准备数据目录和文件
+# 1. 快速开始（使用默认 jsonl 数据集）
+python train.py
+
+# 2. 使用自己的小说数据
 mkdir -p data
 # 将你的小说txt文件放入 data/ 目录
-
-# 2. 训练模型
 python train.py -d data/小说.txt -e 10 -b 4
 
-# 3. 查看训练日志
+# 3. 使用 jsonl 数据集（将 jsonl 文件放入 dataset/ 目录）
+python train.py -d dataset/pretrain_data.jsonl
+
+# 4. 查看训练日志
 cat output/training.log
 
-# 4. 生成文本
+# 5. 生成文本
 python generate.py --model output/model --prompt "第一章" --length 500
 
-# 5. 尝试不同风格
+# 6. 尝试不同风格
 python generate.py --model output/model --prompt "话说" --temperature 1.0
 python generate.py --model output/model --prompt "江湖" --temperature 0.7
 ```
