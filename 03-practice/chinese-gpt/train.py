@@ -105,6 +105,7 @@ Transformer层数        | 12            | 12          | 24
     parser.add_argument("--learning_rate", "-lr", type=float, default=5e-4, help="学习率 (default: 5e-4)")
     parser.add_argument("-e", "--epochs", type=int, default=20, help="训练轮数 (default: 20)")
     parser.add_argument("-s", "--val_split", type=float, default=0.05, help="验证集比例 (default: 0.05)")
+    parser.add_argument("--accumulation_steps", "-acc", type=int, default=1, help="梯度累积步数 (default: 1，即不累积)")
 
     return parser.parse_args()
 
@@ -338,7 +339,9 @@ def train_model(
         optimizer = AdamW(model.parameters(), lr=config["learning_rate"])
         # Cosine schedule + Warmup:前 3% 步线性升 lr,之后余弦衰减到 0
         if scheduler is None:
-            total_steps = config["epochs"] * len(train_loader)
+            # 注意：梯度累积时，实际更新次数 = 数据步数 / accumulation_steps
+            accumulation_steps = config.get("accumulation_steps", 1)
+            total_steps = config["epochs"] * len(train_loader) // accumulation_steps
             warmup_steps = max(1, int(0.03 * total_steps))
             scheduler = get_cosine_schedule_with_warmup(
                 optimizer,
@@ -351,6 +354,10 @@ def train_model(
     if scheduler is not None and loaded_scheduler_state is not None:
         scheduler.load_state_dict(loaded_scheduler_state)
         print(f"  ✓ 恢复 scheduler 状态,当前 lr = {scheduler.get_last_lr()[0]:.2e}")
+
+    accumulation_steps = config.get("accumulation_steps", 1)
+    if accumulation_steps > 1:
+        print(f"  ✓ 启用梯度累积（每 {accumulation_steps} 步更新一次，等效 batch_size={config['batch_size'] * accumulation_steps}）")
 
     patience = 3
     model_path = os.path.join(output_dir, "model")
@@ -370,21 +377,35 @@ def train_model(
             input_ids = batch["input_ids"].to(config["device"])
             labels = batch["labels"].to(config["device"])
 
-            optimizer.zero_grad()
-
             # bf16 autocast:仅前向计算降精度,权重/loss/梯度保持 fp32
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
                 outputs = model(input_ids=input_ids, labels=labels)
                 loss = outputs.loss
 
+            # 梯度累积：把 loss 按累积步数缩小，保证梯度量级一致
+            # 例如 accumulation_steps=4 时，4 步的梯度等效于 4 倍 batch_size
+            loss = loss / accumulation_steps
             loss.backward()
+
+            # 每 accumulation_steps 步才更新一次参数
+            if (train_steps + 1) % accumulation_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 梯度裁剪，防止梯度爆炸
+                optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()  # 每步更新 lr
+                optimizer.zero_grad()
+
+            # 记录真实的 loss（还原缩放）
+            train_loss += loss.item() * accumulation_steps
+            train_steps += 1
+
+        # 处理末尾不足 accumulation_steps 的残余梯度
+        if train_steps % accumulation_steps != 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             if scheduler is not None:
-                scheduler.step()  # 每步更新 lr
-
-            train_loss += loss.item()
-            train_steps += 1
+                scheduler.step()
+            optimizer.zero_grad()
 
         avg_train_loss = train_loss / train_steps
 
@@ -501,6 +522,7 @@ def main():
         "learning_rate": args.learning_rate,
         "epochs": args.epochs,
         "val_split": args.val_split,
+        "accumulation_steps": args.accumulation_steps,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     }
 
