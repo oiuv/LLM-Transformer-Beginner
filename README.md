@@ -216,6 +216,11 @@ LLM-Transformer-Beginner/
 - [LLM-Agent-Beginner](https://github.com/oiuv/LLM-Agent-Beginner) — Agent / Skill / MCP
 - [LLM-Embedding-Beginner](https://github.com/oiuv/LLM-Embedding-Beginner) — Embedding / RAG 应用
 
+**🤝 推荐互补项目**
+- [MiniMind](https://github.com/jingyaogong/minimind) — [项目主页](https://jingyaogong.github.io/minimind/)
+  从零训练一个 64M 参数的完整小模型（3 块钱 + 2 小时）。覆盖 Pretrain → SFT → LoRA → DPO/PPO/GRPO → Agent 训练 → 蒸馏全链路，含 Web Demo 和 API 服务。
+  本项目侧重"理解原理"（逐行手写讲解），MiniMind 侧重"动手训练"（端到端训出一个能对话的模型）。建议先学完本项目理解原理，再用 MiniMind 跑通完整训练流程。
+
 ---
 
 ## 🙏 致谢
