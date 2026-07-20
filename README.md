@@ -101,6 +101,9 @@
 
 `04-future/` 目录预留扩展空间。下面这些**仍属于本项目定位（LLM 训练/微调技术）**，按重要性排序：
 
+**📐 Scaling Laws（已完成）**
+- [scaling-laws.md](04-future/scaling-laws.md) — 模型大小、数据量与计算量的关系（Chinchilla 最优配比、涌现能力）
+
 **📦 参数高效微调（PEFT）**
 - LoRA / QLoRA / AdaLoRA / DoRA / IA³
 - 用 PEFT 库微调开源模型（不写一行训练循环）
