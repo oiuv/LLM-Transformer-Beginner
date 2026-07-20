@@ -104,6 +104,9 @@
 **📐 Scaling Laws（已完成）**
 - [scaling-laws.md](04-future/scaling-laws.md) — 模型大小、数据量与计算量的关系（Chinchilla 最优配比、涌现能力）
 
+**🎓 训练全流程（已完成）**
+- [training-pipeline.md](04-future/training-pipeline.md) — 每一步在教模型什么（Pretrain→SFT→LoRA→RLHF→Agent RL→蒸馏）
+
 **📦 参数高效微调（PEFT）**
 - LoRA / QLoRA / AdaLoRA / DoRA / IA³
 - 用 PEFT 库微调开源模型（不写一行训练循环）
