@@ -241,9 +241,19 @@ def train_bpe_tokenizer(paragraphs, vocab_size, output_dir):
 class NovelDataset(Dataset):
     """文本数据集（通用，支持小说、对话、百科等）"""
 
-    def __init__(self, text, tokenizer, context_length):
+    def __init__(self, text, tokenizer, context_length, cache_path=None):
         self.tokenizer = tokenizer
         self.context_length = context_length
+
+        # 尝试加载缓存
+        if cache_path and os.path.exists(cache_path):
+            print(f"\n[阶段3] 加载缓存数据集: {cache_path}")
+            import numpy as np
+            self.token_ids = np.load(cache_path).tolist()
+            print(f"  总token数: {len(self.token_ids):,}")
+            self.num_samples = (len(self.token_ids) - 1) // context_length
+            print(f"  样本数: {self.num_samples:,}")
+            return
 
         print("\n[阶段3] 创建数据集...")
         print("  编码文本...")
@@ -263,6 +273,13 @@ class NovelDataset(Dataset):
         # 计算样本数
         self.num_samples = (len(self.token_ids) - 1) // context_length
         print(f"  样本数: {self.num_samples:,}")
+
+        # 保存缓存
+        if cache_path:
+            import numpy as np
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            np.save(cache_path, np.array(self.token_ids, dtype=np.int32))
+            print(f"  缓存已保存: {cache_path}")
 
     def __len__(self):
         return self.num_samples
@@ -575,7 +592,10 @@ def main():
     tokenizer = train_bpe_tokenizer(paragraphs, config["vocab_size"], output_dir)
 
     # 3. 创建数据集
-    full_dataset = NovelDataset(text, tokenizer, config["context_length"])
+    # 生成缓存路径：基于数据文件名 + context_length + vocab_size
+    data_basename = os.path.splitext(os.path.basename(config["data_path"]))[0]
+    cache_path = os.path.join(output_dir, f"dataset_cache_{data_basename}_C{config['context_length']}_V{config['vocab_size']}.npy")
+    full_dataset = NovelDataset(text, tokenizer, config["context_length"], cache_path=cache_path)
 
     # 划分训练/验证集
     train_size = int((1 - config["val_split"]) * len(full_dataset))
@@ -599,10 +619,10 @@ def main():
     # torch.compile: PyTorch 2.x 的编译优化，一行代码提速 10-30%
     # 原理：把 Python 字节码编译成优化的计算图，减少 Python 开销
     # 首次编译会慢几十秒，之后每个 epoch 都会快不少
-    # 注意：需要 PyTorch >= 2.0（你的环境已满足）
-    if config["device"] == "cuda":
-        model = torch.compile(model)
-        print("  ✓ 启用 torch.compile 加速")
+    # 注意：需要 PyTorch >= 2.0 + Triton 库（Windows 上 Triton 支持有限，暂不启用）
+    # if config["device"] == "cuda":
+    #     model = torch.compile(model)
+    #     print("  ✓ 启用 torch.compile 加速")
 
     # 检查checkpoint，支持断点续训
     model_path = os.path.join(output_dir, "model")
