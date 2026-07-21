@@ -610,8 +610,10 @@ def main():
     # num_workers: 数据加载的并行进程数
     # - 0: 主进程串行加载（GPU要等CPU，训练速度慢30-50%）
     # - 4: 4个子进程并行加载，GPU不用等（推荐值，可根据CPU核心数调整）
-    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=4, pin_memory=True)
+    # 注意：大数据集时 num_workers 会占用大量内存（每个子进程复制数据集引用）
+    # 当前数据集 2.2亿 token，num_workers=4 会占 45GB+ 内存，改用 0 或 2 更安全
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=0, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=0, pin_memory=True)
 
     # 4. 创建模型
     model = create_model(tokenizer.vocab_size, config, output_dir)
