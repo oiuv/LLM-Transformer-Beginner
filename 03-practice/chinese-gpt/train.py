@@ -1,4 +1,4 @@
-"""中文小说 GPT 训练脚本"""
+"""中文 GPT 训练脚本"""
 
 import os
 import re
@@ -19,7 +19,7 @@ import time
 
 def parse_args():
     """解析命令行参数"""
-    description = """中文小说 GPT 训练脚本
+    description = """中文 GPT 训练脚本
 
 ================================================================================
 📊 配置说明与硬件要求
@@ -66,10 +66,10 @@ Transformer层数        | 12            | 12          | 24
 # 3. 小模型快速实验（低显存）
     python train.py -d data/ -C 256 -L 6
 
-# 4. 单文件训练
+# 4. 单文件训练（支持 txt 和 jsonl）
     python train.py -d data/小说.txt
 
-# 5. 多文件训练（自动合并目录下所有txt）
+# 5. 多文件训练（自动合并目录下所有 txt 和 jsonl）
     python train.py -d data/
 
 # 6. 自定义训练轮数和学习率
@@ -239,7 +239,7 @@ def train_bpe_tokenizer(paragraphs, vocab_size, output_dir):
 
 
 class NovelDataset(Dataset):
-    """小说数据集"""
+    """文本数据集（通用，支持小说、对话、百科等）"""
 
     def __init__(self, text, tokenizer, context_length):
         self.tokenizer = tokenizer
@@ -546,7 +546,7 @@ def main():
 
     # 打印配置
     print("=" * 60)
-    print("中文小说 GPT 训练")
+    print("中文 GPT 训练")
     print("=" * 60)
     print(f"设备: {config['device']}")
     if torch.cuda.is_available():
