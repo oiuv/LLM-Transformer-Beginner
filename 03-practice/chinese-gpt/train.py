@@ -363,6 +363,11 @@ def train_model(
     model_path = os.path.join(output_dir, "model")
     os.makedirs(model_path, exist_ok=True)
 
+    # 日志打印间隔：每100步打印一次loss
+    # 作用：大epoch可能有几千步，每个epoch才打印一次看不到中间变化趋势
+    # 及时发现 loss spike 或发散，方便调参
+    log_interval = 100
+
     for epoch in range(start_epoch, config["epochs"]):
         current_epoch = epoch + 1
         print(f"\nEpoch {current_epoch}/{config['epochs']}")
@@ -393,11 +398,19 @@ def train_model(
                 optimizer.step()
                 if scheduler is not None:
                     scheduler.step()  # 每步更新 lr
-                optimizer.zero_grad()
+                # set_to_none=True: 直接把梯度设为 None，而不是填零
+                # 比默认行为更高效，减少一次内存写操作，省显存省时间
+                optimizer.zero_grad(set_to_none=True)
 
             # 记录真实的 loss（还原缩放）
             train_loss += loss.item() * accumulation_steps
             train_steps += 1
+
+            # 每 log_interval 步打印一次中间loss，方便观察训练趋势
+            if train_steps % log_interval == 0:
+                current_loss = loss.item() * accumulation_steps
+                current_lr = optimizer.param_groups[-1]['lr']
+                print(f"    Step {train_steps}, Loss: {current_loss:.4f}, LR: {current_lr:.2e}")
 
         # 处理末尾不足 accumulation_steps 的残余梯度
         if train_steps % accumulation_steps != 0:
@@ -405,7 +418,7 @@ def train_model(
             optimizer.step()
             if scheduler is not None:
                 scheduler.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
         avg_train_loss = train_loss / train_steps
 
@@ -509,6 +522,11 @@ def main():
     # 解析参数
     args = parse_args()
 
+    # 设置随机种子，保证实验可复现
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+
     # 配置
     config = {
         "data_path": args.data_path,
@@ -569,11 +587,22 @@ def main():
     print(f"  验证集: {len(val_dataset):,}")
 
     # 创建DataLoader
-    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=0, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=0, pin_memory=True)
+    # num_workers: 数据加载的并行进程数
+    # - 0: 主进程串行加载（GPU要等CPU，训练速度慢30-50%）
+    # - 4: 4个子进程并行加载，GPU不用等（推荐值，可根据CPU核心数调整）
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=4, pin_memory=True)
 
     # 4. 创建模型
     model = create_model(tokenizer.vocab_size, config, output_dir)
+
+    # torch.compile: PyTorch 2.x 的编译优化，一行代码提速 10-30%
+    # 原理：把 Python 字节码编译成优化的计算图，减少 Python 开销
+    # 首次编译会慢几十秒，之后每个 epoch 都会快不少
+    # 注意：需要 PyTorch >= 2.0（你的环境已满足）
+    if config["device"] == "cuda":
+        model = torch.compile(model)
+        print("  ✓ 启用 torch.compile 加速")
 
     # 检查checkpoint，支持断点续训
     model_path = os.path.join(output_dir, "model")
