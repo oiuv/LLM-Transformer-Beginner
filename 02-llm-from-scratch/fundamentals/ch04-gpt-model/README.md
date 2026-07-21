@@ -381,8 +381,13 @@ n_ctx=1024: 1024² = 1,048,576 次计算  ← 4倍！
 ### 权重绑定（Weight Tying）
 ```python
 # out_head 的权重与 tok_emb 共享
-# 这样可以减少参数量，并可能提升性能
+self.out_head.weight = self.tok_emb.weight
 ```
+
+**为什么这样做：**
+1. **参数量减半**：`vocab_size × emb_dim` 这一大块参数（124M 模型里约 38M）只算一次，不重复计入输出头
+2. **语义一致性**：输入端把 token id 映射到向量，输出端把向量映射回 vocab 概率——本质是同一套语义空间的正向/逆向映射，共享权重让两者学得更协调
+3. **GPT-2 / GPT-3 的标准做法**，原始 GPT 论文也采用此设计
 
 ---
 
@@ -522,7 +527,7 @@ torch.manual_seed(123)  # 固定随机种子
 ## 运行代码
 
 ```bash
-cd learning/ch04-gpt-model
+cd 02-llm-from-scratch/fundamentals/ch04-gpt-model
 python ch04_code.py
 ```
 

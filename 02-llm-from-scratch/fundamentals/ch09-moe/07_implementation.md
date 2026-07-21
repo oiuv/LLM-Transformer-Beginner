@@ -4,12 +4,14 @@
 
 ### 项目结构
 
+> 📌 **说明**：以下是一个推荐的 MoE 项目目录结构，可用于自己动手实现。本教程提供下方完整的代码实现，但未单独建立 `moe-gpt/` 项目目录——学习者可参考 `projects/instruction-finetuning/` 的组织方式自行搭建。
+
 ```
 projects/
-└── moe-gpt/
-    ├── model.py      # MoE模型定义
-    ├── train.py      # 训练脚本
-    └── generate.py   # 生成脚本
+└── moe-gpt/                 # 推荐结构（需自行创建）
+    ├── model.py             # MoE 模型定义（本文已包含）
+    ├── train.py             # 训练脚本（可参考 ch05 的 train_long.py）
+    └── generate.py          # 生成脚本（可参考 ch05 的 generate.py）
 ```
 
 ## 1. MoE Layer实现
@@ -97,44 +99,56 @@ class MoELayer(nn.Module):
             for _ in range(num_experts)
         ])
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
         """
         Args:
             x: [batch, seq_len, hidden_dim]
         Returns:
             output: [batch, seq_len, hidden_dim]
+            aux_loss: 标量，负载均衡辅助损失（用于鼓励专家被均匀使用）
         """
         batch_size, seq_len, hidden_dim = x.shape
         original_shape = x.shape
-        
+
         # 展平用于批量计算
         x_flat = x.view(-1, hidden_dim)  # [B*L, H]
-        
+
         # 获取路由
         top_k_indices, top_k_weights = self.gate(x)  # [B, L, K], [B, L, K]
         top_k_indices_flat = top_k_indices.view(-1, self.top_k)  # [B*L, K]
         top_k_weights_flat = top_k_weights.view(-1, self.top_k)  # [B*L, K]
-        
+
         # 初始化输出
         output_flat = torch.zeros_like(x_flat)
-        
+
         # 对每个token选择top_k专家加权求和
         for k_idx in range(self.top_k):
             expert_indices = top_k_indices_flat[:, k_idx]  # [B*L]
             expert_weights = top_k_weights_flat[:, k_idx]  # [B*L]
-            
+
             # 对每个专家收集输出
             for expert_idx, expert in enumerate(self.experts):
                 # 找出选择该专家的token
                 mask = (expert_indices == expert_idx)  # [B*L]
-                
+
                 if mask.any():
                     # 计算该专家对这个token的输出
                     expert_output = expert(x_flat[mask])  # [N, H]
-                    # 加权累加
-                    output_flat[mask] += (expert_weights[mask] * expert_output).squeeze(-1)
-        
-        return output_flat.view(*original_shape)
+                    # 加权累加：expert_weights[mask] 是 [N]，需要广播到 [N, H]
+                    # 用 unsqueeze(-1) 显式扩展，避免依赖隐式广播
+                    output_flat[mask] += expert_weights[mask].unsqueeze(-1) * expert_output  # [N, H]
+
+        # 计算负载均衡辅助损失
+        # 目标：让每个专家被选中的频率尽量接近 1/num_experts
+        # 若不均衡（少数专家被大量token选中），训练会退化成只用这几个专家
+        expert_counts = torch.zeros(self.num_experts, device=x.device)
+        for expert_idx in range(self.num_experts):
+            expert_counts[expert_idx] = (top_k_indices == expert_idx).float().sum()
+        expert_freq = expert_counts / expert_counts.sum()  # 归一化为概率分布
+        ideal_freq = 1.0 / self.num_experts
+        aux_loss = self.num_experts * ((expert_freq - ideal_freq) ** 2).sum()
+
+        return output_flat.view(*original_shape), aux_loss
 
 
 class LoadBalancingLoss(nn.Module):
@@ -243,20 +257,25 @@ class MoETransformerBlock(nn.Module):
         # 共享expert（始终参与）
         self.shared_expert = Expert(hidden_dim, ffn_dim)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
+        """
+        Returns:
+            output: [batch, seq_len, hidden_dim]
+            aux_loss: 本层 MoE 的负载均衡损失（标量）
+        """
         # Self-Attention + 残差
         x = x + self.attn(self.norm1(x))
-        
+
         # MoE Layer（包含routed experts + 共享expert）
         # norm2的输出同时送给routed experts和共享expert
         moe_input = self.norm2(x)
-        routed_output = self.moe(moe_input)
+        routed_output, aux_loss = self.moe(moe_input)
         shared_output = self.shared_expert(moe_input)
-        
+
         # 残差连接
         x = x + routed_output + shared_output
-        
-        return x
+
+        return x, aux_loss
 ```
 
 ## 3. 完整MoE模型
@@ -288,29 +307,35 @@ class MoEGPT(nn.Module):
         # 权重绑定
         self.lm_head.weight = self.token_embedding.weight
     
-    def forward(self, input_ids: torch.Tensor, 
+    def forward(self, input_ids: torch.Tensor,
                 labels: Optional[torch.Tensor] = None):
         # Embedding
         x = self.token_embedding(input_ids)
         x = x + self.position_embedding(torch.arange(x.size(1), device=x.device))
-        
-        # Transformer Blocks
+
+        # Transformer Blocks（累计所有层的 aux_loss）
+        total_aux_loss = torch.tensor(0.0, device=x.device)
         for block in self.blocks:
-            x = block(x)
-        
+            x, aux_loss = block(x)
+            total_aux_loss = total_aux_loss + aux_loss
+
         # Output
         x = self.norm(x)
         logits = self.lm_head(x)
-        
+
         loss = None
         if labels is not None:
-            loss = F.cross_entropy(
+            # 主损失：next-token prediction 的交叉熵
+            lm_loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
                 labels.view(-1),
                 ignore_index=-100
             )
-        
-        return {'loss': loss, 'logits': logits}
+            # 总损失 = LM 损失 + 负载均衡损失
+            # alpha 控制辅助损失的权重（通常 0.01）
+            loss = lm_loss + 0.01 * total_aux_loss
+
+        return {'loss': loss, 'logits': logits, 'aux_loss': total_aux_loss}
 
 
 @dataclass
@@ -331,36 +356,29 @@ class MoEConfig:
 def train_moe(config, train_loader, val_loader, device):
     # 创建模型
     model = MoEGPT(config).to(device)
-    
+
     # 优化器
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    
-    # 负载均衡损失
-    aux_loss_fn = LoadBalancingLoss(
-        config.num_experts, 
-        config.top_k, 
-        alpha=0.01
-    )
-    
+
+    # 注意：负载均衡损失（aux_loss）已在 MoEGPT.forward 内部计算并加到 loss 上
+    # 这里不需要再单独实例化 LoadBalancingLoss
+
     best_loss = float('inf')
-    
+
     for epoch in range(config.epochs):
         model.train()
         train_loss = 0
-        
+
         for batch in tqdm(train_loader):
             input_ids = batch['input_ids'].to(device)
             labels = batch['labels'].to(device)
-            
+
             optimizer.zero_grad()
-            
-            # 前向传播
+
+            # 前向传播：outputs['loss'] 已包含 lm_loss + 0.01 * aux_loss
             outputs = model(input_ids, labels)
             loss = outputs['loss']
-            
-            # 辅助损失会在模型内部计算，这里假设它被加到主损失上了
-            # loss = loss + aux_loss
-            
+
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()

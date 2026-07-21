@@ -160,15 +160,26 @@ print("第四部分：可视化嵌入空间")
 print("=" * 60)
 
 # 为了可视化，我们降到2维
-from sklearn.decomposition import PCA
+# 用 numpy 手写 PCA（避免引入 sklearn 依赖）
+# PCA 原理：数据中心化后做 SVD 分解，取前 k 个主成分
+def pca_2d(X):
+    """numpy 实现的 PCA，降到 2 维。
+    步骤：
+    1. 中心化：减去均值
+    2. SVD 分解：X = U S V^T，V 的列就是主成分方向
+    3. 投影：X @ V[:, :2] 得到前两个主成分坐标
+    """
+    X_centered = X - X.mean(axis=0, keepdims=True)
+    # SVD：U (n,k), S (k,), Vt (k, d) —— Vt 的行就是主成分方向
+    U, S, Vt = np.linalg.svd(X_centered, full_matrices=False)
+    return X_centered @ Vt[:2].T  # 投影到前两个主成分
 
 # 提取所有词的嵌入
 all_embeddings = embedding_matrix.numpy()
 all_labels = list(vocab.keys())
 
 # PCA降维到2D
-pca = PCA(n_components=2)
-embeddings_2d = pca.fit_transform(all_embeddings)
+embeddings_2d = pca_2d(all_embeddings)
 
 # 绘制
 fig, ax = plt.subplots(figsize=(10, 8))

@@ -241,7 +241,10 @@ def apply_rope(x, positions, base=10000.0):
 # 测试 RoPE
 seq_len = 4
 dim = 8
-base = 100.0  # 用小值方便演示
+# ⚠️ 演示用 base=100（小值让旋转角度大、看得清楚）
+# 实际模型用的是大值：Transformer 原论文 base=10000，Llama3-8B 用 base=500000
+# base 越大，相邻位置的旋转角度差越小，RoPE 变化越平缓（适合长上下文）
+base = 100.0
 
 # 创建输入向量（模拟 Query 或 Key）
 x = torch.randn(seq_len, dim)
@@ -408,6 +411,8 @@ class RoPEAttention(nn.Module):
 
 # 测试
 print("\n【测试带 RoPE 的注意力】")
+# 注意：这里 base=100 是演示值，实际 Llama3-8B 用 base=500000
+# 小 base 让旋转效应更明显，便于观察位置编码的影响
 rope_attn = RoPEAttention(dim=8, base=100.0)
 
 # 创建输入（模拟"我 爱 学 习"）

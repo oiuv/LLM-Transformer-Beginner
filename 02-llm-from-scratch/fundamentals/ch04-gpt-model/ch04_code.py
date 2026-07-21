@@ -244,6 +244,14 @@ class GPTModel(nn.Module):
         self.final_norm = LayerNorm(cfg["emb_dim"])
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
 
+        # 权重绑定（weight tying）：输出头与词元嵌入共享权重
+        # 这样做的理由：
+        # 1. 大幅减少参数量（vocab_size * emb_dim 这一大块只算一次）
+        # 2. 输入端（把 token id 映射到向量）和输出端（把向量映射回 vocab 概率）
+        #    本质是同一套语义空间的双向映射，共享权重让二者学得更一致
+        # 3. GPT-2 / GPT-3 等模型都采用此做法
+        self.out_head.weight = self.tok_emb.weight
+
     def forward(self, in_idx):
         batch_size, seq_len = in_idx.shape
         tok_embeds = self.tok_emb(in_idx)

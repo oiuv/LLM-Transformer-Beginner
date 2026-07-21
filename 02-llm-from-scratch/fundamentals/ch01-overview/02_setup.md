@@ -79,8 +79,7 @@ LLMs-from-scratch/
 │   ├── ch06-finetuning/ # 微调
 │   ├── ch07-instruction-finetuning/ # 指令微调
 │   ├── ch08-rlhf/       # 人类反馈强化学习
-│   ├── ch09-moe/        # MoE架构
-│   └── ch10-moe-project/ # MoE项目实践
+│   └── ch09-moe/        # MoE架构
 ├── data/                 # 训练数据
 └── model/               # 保存的模型
 ```

@@ -99,7 +99,9 @@ class GPTGenerator:
                 logits = outputs.logits[:, -1, :]  # 取最后一个token的logits
 
                 # 应用温度
-                logits = logits / temperature
+                # temperature 越小，分布越尖锐（更确定）；越大，越平坦（更随机）
+                # 用 max 防止 temperature=0 时除零；接近 0 时退化为 greedy（argmax）
+                logits = logits / max(temperature, 1e-5)
 
                 # 应用重复惩罚
                 # 正确实现：需要根据logits的符号区分处理

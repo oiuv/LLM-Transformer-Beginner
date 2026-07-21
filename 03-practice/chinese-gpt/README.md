@@ -54,7 +54,7 @@ python train.py -d data/
 python train.py -d data/小说.txt -e 5 -b 4
 
 # 小模型快速实验
-python train.py -d data/小说.txt -c 256 -E 512 -L 6 -b 4
+python train.py -d data/小说.txt -C 256 -E 512 -L 6 -b 4
 ```
 
 ### 3. 生成文本
@@ -115,7 +115,7 @@ chinese-gpt/
 
 ### 小模型（快速实验）
 ```bash
-python train.py -d data.txt -c 256 -E 512 -L 6 -H 8 -b 8 -e 10
+python train.py -d data.txt -C 256 -E 512 -L 6 -H 8 -b 8 -e 10
 ```
 - 上下文：256
 - 维度：512
@@ -124,7 +124,7 @@ python train.py -d data.txt -c 256 -E 512 -L 6 -H 8 -b 8 -e 10
 
 ### 标准模型
 ```bash
-python train.py -d data.txt -c 512 -E 768 -L 12 -H 12 -b 4 -e 20
+python train.py -d data.txt -C 512 -E 768 -L 12 -H 12 -b 4 -e 20
 ```
 - 上下文：512
 - 维度：768
@@ -133,7 +133,7 @@ python train.py -d data.txt -c 512 -E 768 -L 12 -H 12 -b 4 -e 20
 
 ### 大模型（需要更多显存）
 ```bash
-python train.py -d data.txt -c 1024 -E 1024 -L 16 -H 16 -b 2 -e 30
+python train.py -d data.txt -C 1024 -E 1024 -L 16 -H 16 -b 2 -e 30
 ```
 
 ## 🎯 训练流程
@@ -188,7 +188,7 @@ output/
 
 ### CUDA 内存不足
 - 减小批次大小：`-b 2` 或 `-b 1`
-- 减小上下文长度：`-c 256`
+- 减小上下文长度：`-C 256`
 - 减小模型维度：`-E 512`
 - 使用梯度累积（需修改代码）
 

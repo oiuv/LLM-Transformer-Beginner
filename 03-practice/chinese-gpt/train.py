@@ -650,7 +650,10 @@ def main():
             loaded_scheduler_state = checkpoint["scheduler_state_dict"]
         print(f"  从第 {start_epoch + 1} 轮继续训练")
         print(f"  最佳验证损失: {best_val_loss:.4f}")
-        os.remove(checkpoint_path)
+        # 注意：这里不立即删除 checkpoint
+        # 原因：若加载后、第一个 epoch 完成前训练崩溃（OOM/断电/Ctrl+C），
+        #       checkpoint 已删则无法再次恢复。让每个 epoch 末尾的保存逻辑
+        #       自然覆盖它，训练正常结束时统一清理（见下方 train_model 末尾）。
 
     # 5. 训练(传入 loaded_scheduler_state 以便 train_model 恢复 lr 调度)
     model, best_val_loss = train_model(model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch, best_val_loss, no_improve_epochs, optimizer, scheduler, loaded_scheduler_state)

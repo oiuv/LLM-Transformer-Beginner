@@ -498,7 +498,7 @@ RLHF 需要大量人工标注：
 ## 运行代码
 
 ```bash
-cd learning/ch08-rlhf
+cd 02-llm-from-scratch/fundamentals/ch08-rlhf
 python ch08_demo.py
 ```
 

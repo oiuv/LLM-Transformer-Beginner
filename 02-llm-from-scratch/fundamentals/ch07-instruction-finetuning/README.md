@@ -312,7 +312,65 @@ Write a response that appropriately completes the request.
 
 ## Q&A 洞察
 
-*（会在你提问后填充）*
+### Q1: 指令微调和分类微调都是 SFT，本质区别在哪？
+
+**问题**：第 6 章和第 7 章都叫"监督微调（SFT）"，都是用有标签数据训练，到底有什么不同？
+
+**回答**：
+- **输出空间不同**：
+  - 分类微调：输出是**离散类别**（spam/ham），固定 2 维。本质是判别式任务。
+  - 指令微调：输出是**自由文本**（"你好世界"），长度可变。本质是生成式任务。
+- **损失计算对象不同**：
+  - 分类微调：只在**最后一个 token** 上算交叉熵（用一个 `[CLS]` token 做分类）。
+  - 指令微调：在**回复的每个 token** 上算交叉熵（教模型逐 token 生成正确回复）。
+- **结构差异**：
+  - 分类微调：`transformer body → classifier（新层）→ 类别概率`
+  - 指令微调：`transformer body → lm_head（复用）→ token 概率`
+
+```
+分类微调：输入 → body → classifier(2维)      → 交叉熵(单点)
+指令微调：输入 → body → lm_head(vocab维)      → 交叉熵(序列)
+```
+
+**关键**：指令微调保留了"生成文本"的能力，只是教模型"按指令生成"而非"乱续写"。
+
+### Q2: 为什么用 Prompt 模板把指令包起来，不直接 (input, output) 训练？
+
+**问题**：直接 `input → output` 训练不行吗？为什么非要套个 `Below is an instruction...` 的模板？
+
+**回答**：
+- **推理时一致性**：用户输入也是这种格式（指令 + 输入）。训练时用模板，推理时用同样的模板，**分布一致**，模型才知道"这是要我执行指令"。
+- **任务边界清晰**：模板用 `<instruction>`、`<input>`、`<output>` 明确划分三段，模型知道哪部分是任务描述、哪部分要生成。
+- **多任务统一**：翻译/总结/问答/写作都用同一模板，模型学到一个"指令-执行"的通用范式，而非每个任务学一套。
+- **现代做法**：ChatGPT、Llama 等用 `<|im_start|>user\n...<|im_end|>` 等 special token 替代纯文本模板，但思想一致——**用统一格式把任务包装成"对话"**。
+
+```
+模板训练：
+"Below is an instruction... ### Instruction: 翻译Hello ### Response: 你好"
+
+推理时：
+"Below is an instruction... ### Instruction: 翻译World ### Response: ?"
+                                                                       ↑ 模型生成
+```
+
+**关键**：模板是"任务接口"——训练和推理用同一个接口，模型才能稳定执行。
+
+### Q3: 训练时只在"回复部分"算损失，指令部分不算，为什么？
+
+**问题**：既然整个序列都喂给模型，为什么不在所有 token 上都算损失？只对 response 部分算损失不就浪费了一半数据吗？
+
+**回答**：
+- **任务目标**：我们要教模型"**给定指令，生成回复**"，不是"**生成指令**"。指令是**输入条件**，不是要预测的目标。
+- **损失掩码（loss mask）**：把指令部分的 label 设为 -100（PyTorch 的 ignore_index），交叉熵会跳过这些位置。
+- **若不掩码会发生什么**：模型会花精力学"如何生成指令模板"，而非"如何执行指令生成回复"。这是**目标偏移**——学了不该学的东西。
+
+```python
+# 输入:  "Below is... Instruction: 翻译Hello Response: 你好"
+# Label: [-100,    -100, ..., -100,  -100,  -100,  "你", "好"]
+#         ↑指令部分不算损失                      ↑只在回复上算损失
+```
+
+**关键**：SFT 是"教模型执行指令"，不是"教模型复述指令"。损失要算在我们要模型生成的部分上。
 
 ---
 
@@ -326,6 +384,6 @@ Write a response that appropriately completes the request.
 ## 运行代码
 
 ```bash
-cd learning/ch07-instruction-finetuning
-python ch07_code.py
+cd 02-llm-from-scratch/fundamentals/ch07-instruction-finetuning
+python ch07_demo.py
 ```

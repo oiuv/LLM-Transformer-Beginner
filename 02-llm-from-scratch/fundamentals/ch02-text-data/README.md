@@ -277,12 +277,13 @@ Input Embeddings [seq_len, embed_dim]
 
 1. **运行完整代码:**
    ```bash
-   python learning/ch02-text-data/ch02_code.py
+   cd 02-llm-from-scratch/fundamentals/ch02-text-data
+   python ch02_code.py
    ```
 
 2. **运行测试:**
    ```bash
-   python learning/ch02-text-data/ch02_test.py
+   python ch02_test.py
    ```
 
 ---

@@ -569,7 +569,7 @@ class MultiHeadAttention(nn.Module):
 ## 运行代码
 
 ```bash
-cd learning/ch03-attention
+cd 02-llm-from-scratch/fundamentals/ch03-attention
 python ch03_code.py
 ```
 

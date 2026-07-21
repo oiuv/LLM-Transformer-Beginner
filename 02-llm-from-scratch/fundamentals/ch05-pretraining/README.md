@@ -408,7 +408,7 @@ Epoch 50: 验证损失 = 7.6026 ← 过拟合了
 ## 运行代码
 
 ```bash
-cd learning/ch05-pretraining
+cd 02-llm-from-scratch/fundamentals/ch05-pretraining
 python ch05_code.py
 ```
 

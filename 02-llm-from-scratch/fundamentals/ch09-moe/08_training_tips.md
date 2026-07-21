@@ -336,6 +336,6 @@ scheduler = WarmupLinearSchedule(
 
 恭喜完成MoE章节！接下来可以：
 
-1. **实践项目**: 在 [ch10 MoE项目](../ch10-moe-project/README.md) 中实现你自己的MoE模型
+1. **动手实践**：参考本文 07_implementation.md 的代码，自行搭建一个 MoE 模型并训练（可参考 ch05-pretraining/train_long.py 的训练流程）
 2. **继续学习**: 探索更多大模型优化技术
 3. **实际应用**: 将MoE应用到你的项目中
