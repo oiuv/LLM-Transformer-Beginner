@@ -25,46 +25,42 @@ def parse_args():
 📊 配置说明与硬件要求
 ================================================================================
 
-【默认配置】针对 16GB 显存（如 RTX 4090）优化：
-    -C 512 -b 8  →  显存占用约 10-12GB，训练速度最快
+【默认配置】针对 16GB 显存（如 RTX 4090）优化，参考 minimind 训练方案：
+    -V 8000 -L 8 -H 8 -b 16 -acc 4  →  等效 batch_size=64，显存占用约 8-10GB
 
-【平衡配置】上下文和速度的平衡：
-    -C 768 -b 6  →  显存占用约 12GB，比512长50%上下文，batch适中
-
-【推荐配置】追求更好的长文本生成效果：
-    -C 1024 -b 4  →  显存占用约 10-12GB，上下文翻倍，适合小说生成
+【大模型配置】追求更好效果（需要更多训练数据）：
+    -V 10000 -L 12 -H 12 -b 8 -acc 8  →  等效 batch_size=64，显存占用约 12GB
 
 【小模型快速实验】显存不足或快速验证：
-    -C 256 -L 6  →  显存占用约 4-6GB，只改上下文和层数，其他默认
+    -V 6400 -L 6 -H 6 -b 16 -acc 2  →  等效 batch_size=32，显存占用约 4-6GB
 
 ================================================================================
-📈 模型规模对比（与 GPT-2 系列）
+📈 默认模型配置（参考 minimind）
 ================================================================================
 
-配置参数                | 你的模型(默认) | GPT-2 Small | GPT-2 Medium
------------------------|---------------|-------------|--------------
-词表大小 (vocab_size)  | 50,000        | 50,257      | 50,257
-上下文长度 (context)   | 512 (可1024)  | 1024        | 1024
-嵌入维度 (emb_dim)     | 768           | 768         | 1024
-Transformer层数        | 12            | 12          | 24
-注意力头数             | 12            | 12          | 16
-参数量                 | ~124M         | ~117M       | ~345M
-显存需求 (参考)        | ~10-12GB      | ~10-12GB    | ~30GB+
-
-默认配置 ≈ GPT-2 Small 级别，但针对中文优化（BPE分词器）
+配置参数                | 默认值  | 说明
+-----------------------|--------|------------------
+词表大小 (vocab_size)  | 8,000  | 中文常用字约3500，8000足够覆盖
+上下文长度 (context)   | 512    | 可选 768/1024
+嵌入维度 (emb_dim)     | 768    | 与 minimind 一致
+Transformer层数        | 8      | 与 minimind 一致
+注意力头数             | 8      | 与 minimind 一致
+批次大小 (batch_size)  | 16     | 梯度累积4步，等效64
+梯度累积               | 4      | 等效 batch_size=16×4=64
+训练轮数 (epochs)      | 3      | 观察验证损失早停
 
 ================================================================================
 🚀 使用示例
 ================================================================================
 
-# 1. 基础训练（默认配置，适合 16GB 显存）
+# 1. 基础训练（默认配置，推荐）
     python train.py -d data/
 
-# 2. 长文本优化（推荐，上下文翻倍）
-    python train.py -d data/ -C 1024 -b 4
+# 2. 长文本优化（上下文翻倍）
+    python train.py -d data/ -C 1024 -b 8 -acc 8
 
 # 3. 小模型快速实验（低显存）
-    python train.py -d data/ -C 256 -L 6
+    python train.py -d data/ -V 6400 -L 6 -H 6
 
 # 4. 单文件训练（支持 txt 和 jsonl）
     python train.py -d data/小说.txt
@@ -73,18 +69,20 @@ Transformer层数        | 12            | 12          | 24
     python train.py -d data/
 
 # 6. 自定义训练轮数和学习率
-    python train.py -d data/ -e 15 -lr 3e-4
+    python train.py -d data/ -e 5 -lr 3e-4
 
 ================================================================================
 💡 参数调优建议
 ================================================================================
 
-• 上下文长度 (-C): 512(快) / 768(平衡，推荐搭配b6) / 1024(效果好但慢)
-• 嵌入维度 (-E) 和头数 (-H): 必须整除，如 -E 768 -H 12 或 -E 512 -H 8
-• 层数 (-L): 默认12，减小到6可以大幅降低显存
-• 批次大小 (-b): 显存够大用 8，不够减到 4 或 2
+• 词表大小 (-V): 8000(推荐) / 6400(最小) / 10000(更大覆盖)
+• 上下文长度 (-C): 512(快) / 768(平衡) / 1024(效果好但慢)
+• 嵌入维度 (-E) 和头数 (-H): 必须整除，如 -E 768 -H 8
+• 层数 (-L): 默认8，减小到6可以大幅降低显存
+• 批次大小 (-b): 显存够大用 16，不够减到 8 或 4
+• 梯度累积 (-acc): 等效 batch_size = -b × -acc，推荐 64
 • 学习率 (-lr): 默认 5e-4，如果发散降到 1e-4，如果收敛慢升到 1e-3
-• 训练轮数 (-e): 一般 10-20 轮，观察验证损失早停
+• 训练轮数 (-e): 一般 2-5 轮，观察验证损失早停
 
 ================================================================================
 """
@@ -96,16 +94,16 @@ Transformer层数        | 12            | 12          | 24
 
     # 可选参数
     parser.add_argument("-o", "--output_dir", type=str, default="./output", help="输出目录 (default: ./output)")
-    parser.add_argument("-V", "--vocab_size", type=int, default=50000, help="词表大小 (default: 50000)")
+    parser.add_argument("-V", "--vocab_size", type=int, default=8000, help="词表大小 (default: 8000，中文常用字约3500，8000足够覆盖)")
     parser.add_argument("-C", "--context_length", type=int, default=512, help="上下文长度 (default: 512)")
     parser.add_argument("-E", "--emb_dim", type=int, default=768, help="嵌入维度 (default: 768)")
-    parser.add_argument("-H", "--n_heads", type=int, default=12, help="注意力头数 (default: 12)")
-    parser.add_argument("-L", "--n_layers", type=int, default=12, help="Transformer层数 (default: 12)")
-    parser.add_argument("-b", "--batch_size", type=int, default=8, help="批次大小 (default: 8)")
+    parser.add_argument("-H", "--n_heads", type=int, default=8, help="注意力头数 (default: 8)")
+    parser.add_argument("-L", "--n_layers", type=int, default=8, help="Transformer层数 (default: 8)")
+    parser.add_argument("-b", "--batch_size", type=int, default=16, help="批次大小 (default: 16)")
     parser.add_argument("--learning_rate", "-lr", type=float, default=5e-4, help="学习率 (default: 5e-4)")
-    parser.add_argument("-e", "--epochs", type=int, default=20, help="训练轮数 (default: 20)")
+    parser.add_argument("-e", "--epochs", type=int, default=3, help="训练轮数 (default: 3)")
     parser.add_argument("-s", "--val_split", type=float, default=0.05, help="验证集比例 (default: 0.05)")
-    parser.add_argument("--accumulation_steps", "-acc", type=int, default=1, help="梯度累积步数 (default: 1，即不累积)")
+    parser.add_argument("--accumulation_steps", "-acc", type=int, default=4, help="梯度累积步数 (default: 4，等效batch_size=16×4=64)")
 
     return parser.parse_args()
 
