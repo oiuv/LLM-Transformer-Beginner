@@ -383,6 +383,55 @@ def create_model(vocab_size, config, output_dir):
     return model
 
 
+def build_optimizer(model, config):
+    """构造 AdamW 优化器,对齐 minimind 训练侧配方。
+
+    与 minimind 训练配方对齐的 3 项关键调整(架构不动前提下):
+      1. betas=(0.9, 0.95):LLM 训练的事实标准,PyTorch 默认 (0.9, 0.999) 在长 tail
+         任务里容易出现 lr 调度与 loss 曲线的耦合震荡。
+      2. weight_decay=0.01:对矩阵参数(Linear/Conv 等 nn > 1 维权重)做 L2 衰减,
+         这是 LLM 训练的另一条经验值。
+      3. 参数分组:矩阵权重走 weight_decay,1D 参数(bias / LayerNorm.weight 等
+         标量形状的张量)走 weight_decay=0。这是标准做法——1D 参数在 weight_decay
+         下容易被"过度惩罚",反而拖慢收敛。
+
+    ⚠️ checkpoint 兼容性:
+       weight_decay / betas 改了之后,旧的 checkpoint.pt 里
+       optimizer_state_dict(param_groups 结构不同)load_state_dict 会报错。
+       如需恢复旧训练,删 output/model/checkpoint.pt,模型权重也一并从这次起从头训。
+    """
+    # 1. 参数分组:2D+ 矩阵参数走 weight_decay,1D (bias / norm.weight 等) 走 0
+    decay_params, no_decay_params = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        # 仅对矩阵参数应用 weight decay:bias / norm weight 是 1D,直接跳过
+        # (nDim > 1 比 param.dim() > 1 更宽松,匹配 nn.Linear.weight / nn.Embedding.weight)
+        if param.ndim >= 2:
+            decay_params.append(param)
+        else:
+            no_decay_params.append(param)
+
+    weight_decay = float(config.get("weight_decay", 0.01))
+    lr = config["learning_rate"]
+
+    optim_groups = [
+        {"params": decay_params,    "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]
+
+    # 2. AdamW:betas=(0.9, 0.95),eps 显式固定,避免依赖 PyTorch 默认
+    optimizer = AdamW(optim_groups, lr=lr, betas=(0.9, 0.95), eps=1e-8)
+
+    n_decay = sum(p.numel() for p in decay_params)
+    n_no_decay = sum(p.numel() for p in no_decay_params)
+    print(f"  ✓ AdamW:lr={lr:.1e}, betas=(0.9, 0.95), eps=1e-8")
+    print(f"  weight_decay={weight_decay} 仅作用于矩阵权重  | 1D 参数(bias / norm.weight)不衰减")
+    print(f"  decay 参数: {n_decay:,}  |  no-decay 参数: {n_no_decay:,}")
+
+    return optimizer
+
+
 def train_model(
     model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch=0, best_val_loss=float("inf"), no_improve_epochs=0, optimizer=None, scheduler=None, loaded_scheduler_state=None
 ):
@@ -396,7 +445,7 @@ def train_model(
         print("  ✓ 启用 bf16 混合精度(权重 fp32 + 计算 bf16)")
 
     if optimizer is None:
-        optimizer = AdamW(model.parameters(), lr=config["learning_rate"])
+        optimizer = build_optimizer(model, config)
         # Cosine schedule + Warmup:前 3% 步线性升 lr,之后余弦衰减到 0
         if scheduler is None:
             # 注意：梯度累积时，实际更新次数 = 数据步数 / accumulation_steps
@@ -680,7 +729,9 @@ def main():
         print("\n  发现checkpoint，正在加载...")
         checkpoint = torch.load(checkpoint_path, map_location=config["device"])
         model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer = AdamW(model.parameters(), lr=config["learning_rate"])
+        # 先用 build_optimizer 构造(同训练配方),再加载 state
+        # 若旧版 checkpoint 形状不匹配,下面这行会抛 param_groups mismatch,提示删 checkpoint.pt
+        optimizer = build_optimizer(model, config)
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_epoch = checkpoint["epoch"]
         best_val_loss = checkpoint["best_val_loss"]
@@ -694,6 +745,11 @@ def main():
         # 原因：若加载后、第一个 epoch 完成前训练崩溃（OOM/断电/Ctrl+C），
         #       checkpoint 已删则无法再次恢复。让每个 epoch 末尾的保存逻辑
         #       自然覆盖它，训练正常结束时统一清理（见下方 train_model 末尾）。
+        # ── optimizer 兼容性提示 ──
+        # build_optimizer 的 weight_decay / betas 与旧版 AdamW(model.parameters())
+        # 不同,param_groups 形状也变了。本代码会自动让新 optimizer 加载新 state;
+        # 如果 load_state_dict 报 param_groups mismatch 多半是旧版 checkpoint,
+        # 删 output/model/checkpoint.pt 重训即可(模型权重也建议从头训以匹配新配方)
 
     # 5. 训练(传入 loaded_scheduler_state 以便 train_model 恢复 lr 调度)
     model, best_val_loss = train_model(model, train_loader, val_loader, tokenizer, config, output_dir, start_epoch, best_val_loss, no_improve_epochs, optimizer, scheduler, loaded_scheduler_state)

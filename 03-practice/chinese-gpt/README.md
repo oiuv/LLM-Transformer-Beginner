@@ -8,6 +8,7 @@
 - ✅ 基于 GPT2 架构
 - ✅ 支持 txt 和 jsonl 数据格式（兼容开源数据集）
 - ✅ per-sample 样本组织 + bos/eos 边界（与 minimind PretrainDataset 对齐）
+- ✅ AdamW betas=(0.9, 0.95) + weight decay 分组（与 minimind 训练配方对齐）
 - ✅ 完整的训练流程
 - ✅ 断点续训支持
 - ✅ 早停机制
@@ -273,6 +274,10 @@ output/
 - 增加数据量
 - 调整学习率：`-lr 1e-4`
 - 使用更大的模型
+
+### 加载旧 checkpoint 时 `param_groups` 不匹配
+升级到 weight-decay 分组 + betas=(0.9, 0.95) 的 AdamW 后，旧的 `output/model/checkpoint.pt` 里 `optimizer_state_dict` 的 `param_groups` 形状不同，`load_state_dict` 会报错。  
+解决：删除 `output/model/checkpoint.pt` 从头重训（建议同时让模型权重跟着新配方走，避免 loss 曲线在新 optimizer 上出现 spike）。
 
 ## 📚 进阶功能
 
