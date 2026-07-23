@@ -9,6 +9,7 @@
 - ✅ 支持 txt 和 jsonl 数据格式（兼容开源数据集）
 - ✅ per-sample 样本组织 + bos/eos 边界（与 minimind PretrainDataset 对齐）
 - ✅ AdamW betas=(0.9, 0.95) + weight decay 分组（与 minimind 训练配方对齐）
+- ✅ 小模型 dropout=0（HF GPT-2 默认 0.1 在 <1 亿参数规模上属过正则化；如需恢复用 `-dp 0.1`）
 - ✅ 完整的训练流程
 - ✅ 断点续训支持
 - ✅ 早停机制
@@ -98,6 +99,7 @@ chinese-gpt/
 | `-L` | Transformer 层数 | 8 |
 | `-b` | 批次大小 | 32 |
 | `-acc` | 梯度累积步数 | 8（等效 batch=256） |
+| `-dp` | Dropout 概率 | 0.0（小模型推荐；HF GPT-2 默认 0.1）|
 | `-lr` | 学习率 | 5e-4 |
 | `-e` | 训练轮数 | 2 |
 | `-s` | 验证集比例 | 0.05 |

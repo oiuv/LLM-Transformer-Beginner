@@ -82,7 +82,8 @@ Transformer层数        | 8      | 与 minimind 一致
 • 批次大小 (-b): 显存够大用 16，不够减到 8 或 4
 • 梯度累积 (-acc): 等效 batch_size = -b × -acc，推荐 64
 • 学习率 (-lr): 默认 5e-4，如果发散降到 1e-4，如果收敛慢升到 1e-3
-• 训练轮数 (-e): 一般 2-5 轮，观察验证损失早停
+• 训练轮数 (-e): 一般 2-5 轮,观察验证损失早停
+• Dropout (-dp): 默认 0.0(小模型<1亿参数时 dropout=0.1 偏大);如需切回 HF GPT-2 默认 0.1 用 -dp 0.1
 
 ================================================================================
 """
@@ -104,6 +105,7 @@ Transformer层数        | 8      | 与 minimind 一致
     parser.add_argument("-e", "--epochs", type=int, default=2, help="训练轮数 (default: 2，与 minimind 默认一致)")
     parser.add_argument("-s", "--val_split", type=float, default=0.05, help="验证集比例 (default: 0.05)")
     parser.add_argument("--accumulation_steps", "-acc", type=int, default=8, help="梯度累积步数 (default: 8，等效batch_size=32×8=256，与 minimind pretrain 默认一致)")
+    parser.add_argument("-dp", "--dropout", type=float, default=0.0, help="Dropout 概率 (default: 0.0;小模型<1亿参数时 dropout 是负收益,设 0.0 训练更稳。HF GPT-2 默认 0.1 在这里偏大,需要时再手动 -dp 0.1 切回)")
 
     return parser.parse_args()
 
@@ -362,13 +364,24 @@ def create_model(vocab_size, config, output_dir):
 
     # 创建新模型
     # 注意：GPT2Config 使用 n_ctx 表示上下文长度，而非 n_positions
+    dropout = float(config.get("dropout", 0.0))
     gpt_config = GPT2Config(
         vocab_size=vocab_size,
         n_ctx=config["context_length"],
         n_embd=config["emb_dim"],
         n_layer=config["n_layers"],
         n_head=config["n_heads"],
+        # dropout:小模型(<1亿参数)默认 0.0,HF GPT-2 默认的 0.1 在这个规模
+        # 上经常是负收益——8 层 / 768 维 / 6400 vocab 约 8500 万参数,
+        # 远未到"必须正则化"的程度。需要切回 HF 默认用 -dp 0.1
+        resid_pdrop=dropout,
+        embd_pdrop=dropout,
+        attn_pdrop=dropout,
     )
+    if dropout > 0:
+        print(f"  ⚠ dropout={dropout} 已启用(HF GPT-2 默认风格);小模型上通常 -dp 0.0 训练更稳")
+    else:
+        print(f"  ✓ dropout=0(小模型推荐设置;HF GPT-2 默认 0.1 在此规模属过正则化)")
 
     model = GPT2LMHeadModel(gpt_config)
     model = model.to(config["device"])
@@ -650,6 +663,7 @@ def main():
         "epochs": args.epochs,
         "val_split": args.val_split,
         "accumulation_steps": args.accumulation_steps,
+        "dropout": args.dropout,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     }
 
