@@ -67,8 +67,11 @@ class GPTGenerator:
     def decode(self, ids, skip_special_tokens=True):
         """解码token，并进行中文后处理"""
         text = self.tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
-        # 中文后处理：去除空格和BPE前缀符号
-        text = text.replace(" ", "").replace("▁", "")
+        # 中文后处理:清理 ByteLevel pre_tokenizer 留下的"词首空格"标记
+        # ByteLevel 用 Ġ(U+0120)代替 ASCII 空格表示"这个 token 原本是词首"
+        # 中文输出里这些字符没有语义,必须删掉,否则会污染生成结果
+        # 注意:不是替换为 ASCII 空格(会让中文词之间多出空格),而是直接删除
+        text = text.replace("Ġ", " ").replace(" ", "")
         return text
 
     def generate(self, prompt, max_length=500, temperature=0.8, top_p=0.9, repetition_penalty=1.1):
