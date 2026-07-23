@@ -12,7 +12,7 @@ from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast, g
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.pre_tokenizers import ByteLevel, Whitespace
 from tqdm import tqdm
 import time
 
@@ -94,23 +94,38 @@ Transformer层数        | 8      | 与 minimind 一致
 
     # 可选参数
     parser.add_argument("-o", "--output_dir", type=str, default="./output", help="输出目录 (default: ./output)")
-    parser.add_argument("-V", "--vocab_size", type=int, default=8000, help="词表大小 (default: 8000，中文常用字约3500，8000足够覆盖)")
-    parser.add_argument("-C", "--context_length", type=int, default=512, help="上下文长度 (default: 512)")
-    parser.add_argument("-E", "--emb_dim", type=int, default=768, help="嵌入维度 (default: 768)")
-    parser.add_argument("-H", "--n_heads", type=int, default=8, help="注意力头数 (default: 8)")
-    parser.add_argument("-L", "--n_layers", type=int, default=8, help="Transformer层数 (default: 8)")
-    parser.add_argument("-b", "--batch_size", type=int, default=16, help="批次大小 (default: 16)")
+    parser.add_argument("-V", "--vocab_size", type=int, default=6400, help="词表大小 (default: 6400，与 minimind 默认一致)")
+    parser.add_argument("-C", "--context_length", type=int, default=340, help="上下文长度 (default: 340，与 minimind 默认一致；中文 1token≈1.5~1.7字符)")
+    parser.add_argument("-E", "--emb_dim", type=int, default=768, help="嵌入维度 (default: 768，与 minimind 默认一致)")
+    parser.add_argument("-H", "--n_heads", type=int, default=8, help="注意力头数 (default: 8，与 minimind 默认一致)")
+    parser.add_argument("-L", "--n_layers", type=int, default=8, help="Transformer层数 (default: 8，与 minimind 默认一致)")
+    parser.add_argument("-b", "--batch_size", type=int, default=32, help="批次大小 (default: 32，与 minimind 默认一致；显存不够可降到 16/8)")
     parser.add_argument("--learning_rate", "-lr", type=float, default=5e-4, help="学习率 (default: 5e-4)")
-    parser.add_argument("-e", "--epochs", type=int, default=3, help="训练轮数 (default: 3)")
+    parser.add_argument("-e", "--epochs", type=int, default=2, help="训练轮数 (default: 2，与 minimind 默认一致)")
     parser.add_argument("-s", "--val_split", type=float, default=0.05, help="验证集比例 (default: 0.05)")
-    parser.add_argument("--accumulation_steps", "-acc", type=int, default=4, help="梯度累积步数 (default: 4，等效batch_size=16×4=64)")
+    parser.add_argument("--accumulation_steps", "-acc", type=int, default=8, help="梯度累积步数 (default: 8，等效batch_size=32×8=256，与 minimind pretrain 默认一致)")
 
     return parser.parse_args()
 
 
 def load_and_preprocess_data(data_path):
-    """加载并预处理文本数据（支持文件、目录、jsonl）"""
+    """加载并预处理文本数据（支持文件、目录、jsonl）。
+
+    返回:
+        samples: 训练样本列表,每个元素是一条独立文本
+                 (jsonl 一行 = 一个样本;txt 一个文件 = 一个样本)
+        paragraphs: 用于训练 BPE 的段落集合
+                    (从 samples 二次切分,按段落切到细粒度供 BPE 学合并)
+
+    关键设计变更:
+        旧实现把所有文本 "join 成一整个字符串" + 按 context_length 滑动切块
+        → 相邻块互相重叠,没有显式"样本边界",模型分不清哪里是段尾/新一段开头。
+        新实现是 per-sample:每条 jsonl/txt 本身就是一条独立样本,
+        用 bos + text + eos 包裹(bos=样本开始 / eos=样本结束),
+        模型能清晰学到"样本边界",与 minimind 的 PretrainDataset 风格一致。
+    """
     print("\n[阶段1] 加载数据...")
+    samples = []  # 每个元素是一条独立样本(字符串)
 
     # 支持目录输入
     if os.path.isdir(data_path):
@@ -120,68 +135,69 @@ def load_and_preprocess_data(data_path):
         if not txt_files and not jsonl_files:
             raise FileNotFoundError(f"目录下没有txt或jsonl文件: {data_path}")
         print(f"  数据目录: {data_path}")
-        all_text = []
+        # txt:整个文件 = 一个样本(去前后空白)
         for txt_file in txt_files:
             with open(txt_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
-                all_text.append(content)
-                print(f"    - {os.path.basename(txt_file)}: {len(content):,}字符")
+                if content:
+                    samples.append(content)
+                    print(f"    - {os.path.basename(txt_file)}: {len(content):,}字符 (1个样本)")
+        # jsonl:每行 = 一个样本(与 minimind PretrainDataset 一致)
         for jsonl_file in jsonl_files:
             with open(jsonl_file, "r", encoding="utf-8") as f:
-                texts = []
+                file_count = 0
                 for line in f:
                     if not line.strip():
                         continue
                     try:
                         obj = json.loads(line)
-                        if "text" in obj:
-                            texts.append(obj["text"])
+                        if "text" in obj and obj["text"].strip():
+                            samples.append(obj["text"].strip())
+                            file_count += 1
                     except json.JSONDecodeError:
                         continue
-                content = "\n\n".join(texts)
-                all_text.append(content)
-                print(f"    - {os.path.basename(jsonl_file)}: {len(texts):,}条, {len(content):,}字符")
-        text = "\n\n".join(all_text)
+                print(f"    - {os.path.basename(jsonl_file)}: {file_count:,}个样本")
     elif data_path.endswith(".jsonl"):
-        # jsonl 格式：每行 {"text": "..."}
+        # jsonl 格式:每行 {"text": "..."}
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"数据文件不存在: {data_path}")
         print(f"  数据文件: {data_path}")
         with open(data_path, "r", encoding="utf-8") as f:
-            texts = []
             for line in f:
                 if not line.strip():
                     continue
                 try:
                     obj = json.loads(line)
-                    if "text" in obj:
-                        texts.append(obj["text"])
+                    if "text" in obj and obj["text"].strip():
+                        samples.append(obj["text"].strip())
                 except json.JSONDecodeError:
                     continue
-        text = "\n\n".join(texts)
-        print(f"  jsonl记录数: {len(texts):,}")
+        print(f"  jsonl记录数: {len(samples):,}")
     else:
+        # txt 文件:整个文件 = 一个样本
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"数据文件不存在: {data_path}")
         print(f"  数据文件: {data_path}")
         with open(data_path, "r", encoding="utf-8") as f:
-            text = f.read()
+            content = f.read().strip()
+        if content:
+            samples.append(content)
 
-    text = text.strip()
+    # 把所有样本 join 起来(仅用于统计 + 给 BPE 切段落)
+    text = "\n\n".join(samples)
 
     # 统计信息
-    total_chars = len(text)
-    total_lines = text.count("\n") + 1
-
+    total_chars = sum(len(s) for s in samples)
+    print(f"  样本数: {len(samples):,}")
     print(f"  总字符数: {total_chars:,}")
-    print(f"  总行数: {total_lines:,}")
 
-    # 分割成段落（用于训练BPE）- 按连续空行分割
+    # 切出 paragraphs 给 BPE 训练用(BPE 需要切到比样本更细的粒度学合并)
+    # 按连续空行切,过滤太短的段落
     paragraphs = re.split(r"\n{2,}", text)
     paragraphs = [p.strip() for p in paragraphs if p.strip() and len(p.strip()) > 10]
-    print(f"  有效段落: {len(paragraphs):,}")
+    print(f"  BPE 段落数(供分词器训练): {len(paragraphs):,}")
 
-    return text, paragraphs
+    return samples, paragraphs
 
 
 def train_bpe_tokenizer(paragraphs, vocab_size, output_dir):
@@ -202,11 +218,28 @@ def train_bpe_tokenizer(paragraphs, vocab_size, output_dir):
             print(f"  词表大小: {tokenizer.vocab_size}")
             return tokenizer
 
-    # 创建BPE分词器 - 使用字节级适配中文
+    # 创建BPE分词器 - 预处理器选择（实现细节，与 minimind 对齐）
+    #
+    # BPE 算法本身是"在已切好的小段上做频率合并"，pre_tokenizer 负责"先怎么切"。
+    # 对中文有两个常见选择:
+    #
+    # (1) Whitespace():按"空格/换行"切
+    #   - 优点:英文/中英混合时表现自然,代码直观
+    #   - 致命问题:中文没有空格 → 整段汉字变成一个"词"丢给 BPE
+    #     → BPE 几乎只能学到整句级别的合并,词汇碎片化严重
+    #     → 同样的 context_length 下,中文 token 序列更长、信息密度更低
+    #
+    # (2) ByteLevel():按 UTF-8 字节切(GPT-2 同款)
+    #   - 每个中文字符 → 2~3 字节(UTF-8 中文字符固定 3 字节) → 3 个"字节级 token"
+    #   - BPE 在字节上做频率合并 → 学到"常用字/常用偏旁"作为 token
+    #   - 中文压缩率约 1.5~1.7 char/token(README 注释),是 Whitespace 的 ~3 倍
+    #   - 跨语言一致:同一套 token 表能处理中英混排,不会出现"中文字符整个 OOV"
+    #   - 副作用:token 数看着多,但 embedding 层(vocab_size=6400)照常工作
+    #
+    # minimind 默认就用 ByteLevel;chinese-gpt 之前用 Whitespace 是为了代码简洁。
+    # 切到 ByteLevel 是实现选型差异,不是新概念:BPE 训练/合并/解码流程完全一致。
     tokenizer = Tokenizer(BPE(unk_token="<|unk|>"))
-    # 注意：中文文本没有空格分隔，必须使用 Whitespace() 进行预处理
-    # CharDelimiterSplit(" ") 对中文无效，会导致整个段落被当作一个token
-    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
 
     # 配置训练器
     # min_frequency=1: 即使生僻字只出现 1 次也保留进词表,大幅减少 <unk> 输出
@@ -237,66 +270,78 @@ def train_bpe_tokenizer(paragraphs, vocab_size, output_dir):
 
 
 class NovelDataset(Dataset):
-    """文本数据集（通用，支持小说、对话、百科等）"""
+    """文本数据集(通用,支持小说、对话、百科等)。
 
-    def __init__(self, text, tokenizer, context_length, cache_path=None):
+    设计:per-sample + bos+text+eos 边界
+
+    旧实现把全文本拼成一个长字符串,按 context_length 滑动切块:
+        相邻块互相重叠,没有显式的"样本边界"标记。
+        模型分不清"这是一段的结尾"还是"这是另一段的开头",
+        位置编码学到的是"在第 N 个 token",而不是"在第 N 条样本内"。
+
+    新实现每条样本独立处理:
+        1. 取第 idx 条样本(一段 jsonl text 或一个 txt 文件内容)
+        2. tokenizer.encode() 一次性编码,max_length = context_length - 2(留位置给 bos/eos)
+        3. 用 bos_id + tokens + eos_id 包裹,pad 不足的位置
+        4. labels[i] = tokens[i+1] 风格的 LM 目标;labels[pad] = -100(不计入 loss)
+
+    这样模型能清晰学到:
+        - bos 之后是新样本开头
+        - eos 处必停(生成时撞到 eos 就结束)
+        - 一个 context_length 窗口 = 一条完整样本,位置编码更稳定
+
+    注:删掉了原来的 .npy cache 逻辑 —— per-sample 不需要预编码整个语料,
+       每次 __getitem__ 重新 tokenize 即可(minimind 同款做法)。
+       首次训练时会比旧版稍慢(逐条 tokenize),但样本数也少得多,差距不大。
+    """
+
+    def __init__(self, samples, tokenizer, context_length):
+        self.samples = samples
         self.tokenizer = tokenizer
         self.context_length = context_length
+        self.bos_id = tokenizer.bos_token_id
+        self.eos_id = tokenizer.eos_token_id
+        self.pad_id = tokenizer.pad_token_id
 
-        # 尝试加载缓存
-        if cache_path and os.path.exists(cache_path):
-            print(f"\n[阶段3] 加载缓存数据集: {cache_path}")
-            import numpy as np
-            self.token_ids = np.load(cache_path).tolist()
-            print(f"  总token数: {len(self.token_ids):,}")
-            self.num_samples = (len(self.token_ids) - 1) // context_length
-            print(f"  样本数: {self.num_samples:,}")
-            return
-
-        print("\n[阶段3] 创建数据集...")
-        print("  编码文本...")
-
-        # 分批编码（避免内存问题）
-        chunk_size = 100000
-        all_ids = []
-
-        for i in tqdm(range(0, len(text), chunk_size), desc="  编码进度"):
-            chunk = text[i : i + chunk_size]
-            ids = tokenizer.encode(chunk)
-            all_ids.extend(ids)
-
-        self.token_ids = all_ids
-        print(f"  总token数: {len(self.token_ids):,}")
-
-        # 计算样本数
-        self.num_samples = (len(self.token_ids) - 1) // context_length
-        print(f"  样本数: {self.num_samples:,}")
-
-        # 保存缓存
-        if cache_path:
-            import numpy as np
-            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            np.save(cache_path, np.array(self.token_ids, dtype=np.int32))
-            print(f"  缓存已保存: {cache_path}")
+        print("\n[阶段3] 创建数据集(per-sample 模式)...")
+        print(f"  样本数: {len(self.samples):,}")
+        print(f"  上下文长度: {self.context_length}")
 
     def __len__(self):
-        return self.num_samples
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        start = idx * self.context_length
-        end = start + self.context_length + 1
+        # 1. 取一条样本(整段字符串)
+        text = self.samples[idx]
 
-        chunk = self.token_ids[start:end]
+        # 2. 编码:在 encode 时就截断到 context_length - 2,留位置给 bos/eos
+        #    add_special_tokens=False,手动加 bos/eos
+        #    truncation=True + max_length 是 tokenizer 内部的截断,与 PretrainDataset 等价
+        token_ids = self.tokenizer.encode(
+            text,
+            add_special_tokens=False,
+            max_length=self.context_length - 2,
+            truncation=True,
+        )
 
-        # 填充
-        if len(chunk) < self.context_length + 1:
-            chunk = chunk + [self.tokenizer.pad_token_id] * (self.context_length + 1 - len(chunk))
+        # 3. 用 bos + text + eos 包裹,pad 到 context_length
+        #    长度上限就是 context_length(bos + (ctx-2) + eos)
+        full = [self.bos_id] + token_ids + [self.eos_id]
+        if len(full) < self.context_length:
+            full = full + [self.pad_id] * (self.context_length - len(full))
+        else:
+            full = full[: self.context_length]
 
-        input_ids = torch.tensor(chunk[:-1], dtype=torch.long)
-        labels = torch.tensor(chunk[1:], dtype=torch.long)
+        input_ids = torch.tensor(full, dtype=torch.long)
 
-        # 忽略padding的损失
-        labels[labels == self.tokenizer.pad_token_id] = -100
+        # 4. LM 目标:下一 token 预测
+        #    labels[i] = input_ids[i+1],最后一位无目标
+        labels = input_ids.clone()
+        labels[:-1] = input_ids[1:]
+        labels[-1] = -100
+
+        # 忽略 padding 的损失
+        labels[labels == self.pad_id] = -100
 
         return {"input_ids": input_ids, "labels": labels}
 
@@ -583,17 +628,14 @@ def main():
     output_dir = config["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. 加载数据
-    text, paragraphs = load_and_preprocess_data(config["data_path"])
+    # 1. 加载数据 (samples 给训练用, paragraphs 给 BPE 用)
+    samples, paragraphs = load_and_preprocess_data(config["data_path"])
 
     # 2. 训练分词器
     tokenizer = train_bpe_tokenizer(paragraphs, config["vocab_size"], output_dir)
 
-    # 3. 创建数据集
-    # 生成缓存路径：基于数据文件名 + context_length + vocab_size
-    data_basename = os.path.splitext(os.path.basename(config["data_path"]))[0]
-    cache_path = os.path.join(output_dir, f"dataset_cache_{data_basename}_C{config['context_length']}_V{config['vocab_size']}.npy")
-    full_dataset = NovelDataset(text, tokenizer, config["context_length"], cache_path=cache_path)
+    # 3. 创建数据集 (per-sample 模式,无 .npy 缓存)
+    full_dataset = NovelDataset(samples, tokenizer, config["context_length"])
 
     # 划分训练/验证集
     train_size = int((1 - config["val_split"]) * len(full_dataset))
